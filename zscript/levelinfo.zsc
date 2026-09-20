@@ -4,99 +4,9 @@
 
 class levelinfobridge
 {
-	ui private static bool checkinventory(string inventoryitem)
-	{
-		class<Inventory> inventory = inventoryitem;
-		playerinfo player = players[consoleplayer];
-
-		let item = player.mo.findinventory(inventory);
-
-		if (item)
-			return true;
-
-		return false;
-	}
-
-	ui private static bool checkstartuptitle(string title)
-	{
-		array<String> properties;
-		bool found;
-		int end;
-		int lumps = wads.findlump("GAMEINFO", 0, Wads.GLOBALNAMESPACE);
-		string lump, value;
-
-		while (lumps != -1)
-		{
-			lump = lump .. wads.readlump(lumps);
-			lumps = wads.findlump("GAMEINFO", lumps + 1, Wads.GLOBALNAMESPACE);
-		}
-
-		if (lump)
-		{
-			lump.split(properties, "=", TOK_SKIPEMPTY);
-
-			for (int i = 0; i < properties.size(); i++)
-			{
-				properties[i].stripleftright();
-
-				if (properties[i].mid(properties[i].length() - 12, 12) ~== "startuptitle")
-				{
-					value = properties[i + 1];
-					value.stripleftright();
-					end = value.rightindexof("\"");
-
-					if (end > -1)
-					{
-						value = value.mid(0, end);
-						value.replace("\"", "");
-					}
-					else
-					{
-						end = value.rightindexof("\n");
-
-						if (end > -1)
-							value = value.mid(0, end);
-					}
-
-					if (value ~== title)
-					{
-						found = true;
-						break;
-					}
-				}
-			}
-
-			if (found)
-				return true;
-		}
-
-		return false;
-	}
-
-	ui private static string getauthorname()
-	{
-		return stringtable.localize(level.authorname);
-	}
-
-	ui private static string getclass()
-	{
-		playerinfo player = players[consoleplayer];
-		return player.mo.getclassname();
-	}
-
 	ui private static int getconsoleplayer()
 	{
 		return consoleplayer;
-	}
-
-	ui private static bool getdeath()
-	{
-		playerinfo player = players[consoleplayer];
-
-		if (player.mo is "PlayerChunk")
-			return true;
-
-		return false;
 	}
 
 	ui private static int gethazard()
@@ -105,61 +15,10 @@ class levelinfobridge
 		return player.hazardcount;
 	}
 
-	ui private static int getinventory(string inventoryitem, bool powerup)
-	{
-		class<Inventory> inventory = inventoryitem;
-		playerinfo player = players[consoleplayer];
-
-		if (powerup)
-		{
-			let item = powerup(player.mo.findinventory(inventory));
-
-			if (item)
-				return item.effecttics;
-		}
-		else
-		{
-			let item = player.mo.findinventory(inventory);
-
-			if (item)
-				return item.amount;
-		}
-
-		return 0;
-	}
-
-	ui private static string getlevelname()
-	{
-		return stringtable.localize(level.levelname);
-	}
-
-	ui private static string getmapname()
-	{
-		return level.mapname;
-	}
-
 	ui private static int getmorph()
 	{
 		playerinfo player = players[consoleplayer];
 		return player.morphtics;
-	}
-
-	ui private static int getoxygen()
-	{
-		playerinfo player = players[consoleplayer];
-
-		if (player.health > 0 && player.mo.waterlevel == 3 && !(player.cheats & (CF_GODMODE | CF_GODMODE2)))
-			return max(player.air_finished - level.maptime, -1);
-
-		return -2;
-	}
-
-	ui private static bool getnoautosavehint()
-	{
-		if (level.info && level.info.flags2 & LEVEL2_NOAUTOSAVEHINT)
-			return true;
-
-		return false;
 	}
 
 	ui private static int getpoison()
@@ -172,184 +31,266 @@ class levelinfobridge
 	{
 		return level.totaltime;
 	}
+}
 
-	ui private static string powerassign()
+class levelinforenderer : eventhandler
+{
+	const LI_BASECOLOR = font.CR_WHITE;
+	const LI_STALETICS = 140;
+
+	string litexts;
+	string livalues;
+	int lilastupdate;
+
+	/*--------------------\
+	   ACS Entry Points
+	\--------------------*/
+
+	play static void pushrows(string texts, string values)
 	{
-		int lump = -1;
-		int lumps;
-		string powerassignment;
+		let renderer = levelinforenderer(eventhandler.find("levelinforenderer"));
 
-		for (int i = 0; lumps != -1; i++)
+		if (renderer == null)
+			return;
+
+		renderer.litexts = texts;
+		renderer.livalues = values;
+		renderer.lilastupdate = level.time;
+	}
+
+	play static void clear()
+	{
+		let renderer = levelinforenderer(eventhandler.find("levelinforenderer"));
+
+		if (renderer == null)
+			return;
+
+		renderer.litexts = "";
+		renderer.livalues = "";
+		renderer.lilastupdate = -LI_STALETICS * 2;
+	}
+
+	/*----------\
+	   Drawing
+	\----------*/
+
+	// getfont() is used rather than findfont() because SHAFONT and SHADFONT are
+	// bare single-lump FON2 files that nothing registers at startup; only
+	// getfont() builds a font object for them on demand.
+	private ui static font resolvefont(playerinfo player)
+	{
+		font resolved = null;
+
+		switch (cvar.getcvar("li_font", player).getint())
 		{
-			lumps = wads.findlump("LIASSIGN", i, Wads.GLOBALNAMESPACE);
+			case 1: // Doom
+				resolved = font.getfont("SHADFONT");
+				break;
+			case 2: // Mod Small Font
+				resolved = font.getfont("SmallFont");
+				break;
+			case 3: // Mod Big Font
+				resolved = font.getfont("BigFont");
+				break;
+			case 4: // Custom
+			{
+				string customname = cvar.getcvar("li_fontcustom", player).getstring();
 
-			if (lumps >= 0)
-				lump++;
+				if (customname.length() > 0)
+					resolved = font.getfont(customname);
+
+				break;
+			}
+			default: // LevelInfo
+				resolved = font.getfont("SHAFONT");
+				break;
 		}
 
-		if (lump != -1)
+		if (resolved == null)
+			resolved = font.getfont("SmallFont");
+
+		if (resolved == null)
+			resolved = smallfont;
+
+		return resolved;
+	}
+
+	override void renderoverlay(renderevent e)
+	{
+		string texts = litexts;
+		string values = livalues;
+
+		if (texts.length() == 0)
+			return;
+
+		// a negative age means the level changed out from under the last push
+		int age = level.time - lilastupdate;
+
+		if (age < 0 || age > LI_STALETICS)
+			return;
+
+		playerinfo player = players[consoleplayer];
+
+		if (player == null)
+			return;
+
+		if (!cvar.getcvar("li_visible", player).getint())
+			return;
+
+		if (automapactive && !cvar.getcvar("li_showonmap", player).getint())
+			return;
+
+		font renderfont = resolvefont(player);
+
+		if (renderfont == null)
+			return;
+
+		// reproduces the clean-scaled space HudMessage drew into when no
+		// SetHudSize was ever issued; a smaller canvas renders larger text
+		int scale = cvar.getcvar("li_scale", player).getint();
+
+		if (scale < 0 || scale > 8)
+			scale = 0;
+
+		double canvaswidth = double(screen.getwidth()) / double(scale ? scale : max(1, cleanxfac));
+		double canvasheight = double(screen.getheight()) / double(scale ? scale : max(1, cleanyfac));
+
+		// the two strings are lockstep; blank entries are deliberate separator
+		// rows and still consume a row of height
+		array<string> labels;
+		array<string> numbers;
+
+		texts.split(labels, "\n");
+		values.split(numbers, "\n");
+
+		int labelcount = labels.size();
+		int numbercount = numbers.size();
+		int rowcount = max(labelcount, numbercount);
+
+		if (rowcount == 0)
+			return;
+
+		int rowheight = max(1, renderfont.getheight());
+		int cellwidth = max(1, renderfont.stringwidth("0"));
+		int columngap = max(4, renderfont.stringwidth(" ") * 2);
+		int labelwidth = 0;
+		int numberwidth = 0;
+
+		for (int i = 0; i < labelcount; i++)
+			labelwidth = max(labelwidth, renderfont.stringwidth(labels[i]));
+
+		for (int i = 0; i < numbercount; i++)
+			numberwidth = max(numberwidth, renderfont.stringwidth(numbers[i]));
+
+		double blockwidth = double(labelwidth + columngap + numberwidth);
+		double blockheight = double(rowcount * rowheight);
+		bool alignx, aligny;
+		double xfraction, yfraction, marginx, marginy;
+
+		switch (cvar.getcvar("li_position", player).getint())
 		{
-			powerassignment = wads.readlump(lump);
-		}
-		else
-		{
-			string playerclass = getclass();
-
-			// Argent
-			if (playerclass == "ArgPlayer")
+			case 0: // Custom
 			{
-				powerassignment =
-					"PowerStrength, Berserk, berserk, g"		.. "\n" ..
-					"ArgPowerHasteSpeed, Fast, calm, i"			.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"ArgPowerInvuln, Immune, calm, k"			.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"ArgPowerQuadDamage, Quad, calm, t"			.. "\n" ..
-					"ArgPowerRegen, Regen, calm, y"				.. "\n" ..
-					"PowerIronfeet, Suit, calm, d";
-			}
+				int offsetx = cvar.getcvar("li_x", player).getint();
+				int offsety = cvar.getcvar("li_y", player).getint();
 
-			// Ashes 2063, Ashes Afterglow
-			else if (playerclass == "Scavenger")
-			{
-				powerassignment =
-					"PowerInvulnerable, Immune, calm, f"		.. "\n" ..
-					"PowerDoubleFiringSpeed, Rage, calm, a"		.. "\n" ..
-					"PowerRegeneration, Regen, calm, y"			.. "\n" ..
-					"PowerIronfeet, Suit, calm, d";
-			}
+				if (offsetx < 0 || offsetx > 90)
+					offsetx = 0;
 
-			// Brutal Doom
-			else if (playerclass == "BDoomer" || playerclass == "Doomer2" || playerclass == "TacticalDoomer" || playerclass == "Purist")
-			{
-				powerassignment =
-					"PowerStrength, Berserk, berserk, g"		.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerTransformBaron, Morph, calm, o"		.. "\n" ..
-					"PowerTransformRevenant, Morph, calm, o"	.. "\n" ..
-					"PowerTorch, Light, calm, f"				.. "\n" ..
-					"PowerIronfeet, Suit, calm, d";
-			}
+				if (offsety < 0 || offsety > 50)
+					offsety = 0;
 
-			// Death Foretold
-			else if (playerclass == "Doom4Player")
-			{
-				powerassignment =
-					"PowerD4Strength, Berserk, berserk, g"		.. "\n" ..
-					"PowerD4Speed, Fast, calm, i"				.. "\n" ..
-					"PowerD4Invisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerD4Invulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerQDamage, Quad, calm, t"				.. "\n" ..
-					"PowerD4Regeneration, Regen, calm, y"		.. "\n" ..
-					"PowerD4IronFeet, Suit, calm, d";
+				alignx = cvar.getcvar("li_alignx", player).getint();
+				aligny = cvar.getcvar("li_aligny", player).getint();
+				xfraction = alignx ? 1.0 : 0.0;
+				yfraction = aligny ? 1.0 : 0.0;
+				marginx = double((offsetx + 1) * cellwidth);
+				marginy = double((offsety + 1) * rowheight);
+				break;
 			}
-
-			// Diamond Dragon
-			else if (playerclass == "Kiwi")
-			{
-				powerassignment =
-					"PowerBerserk, Berserk, berserk, g"			.. "\n" ..
-					"PowerCloaked, Hidden, calm, n"				.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerNightVisionMode, Light, calm, f"		.. "\n" ..
-					"PowerRadMask, Suit, calm, d";
-			}
-
-			// Doom 64 Retribution
-			else if (playerclass == "64DoomPlayer" && !checkinventory("Stamina"))
-			{
-				powerassignment =
-					"PowerStrength, Berserk, berserk, g"		.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"64PowerLightAmp, Light, calm, f"			.. "\n" ..
-					"PowerIronFeet, Suit, calm, d";
-			}
-
-			// Doom Incarnate
-			else if (playerclass == "BloodRayne" || playerclass == "CaptainBlazkowicz")
-			{
-				powerassignment =
-					"PowerWrath, Berserk, calm, g"				.. "\n" ..
-					"PowerPsyche, Hidden, calm, n"				.. "\n" ..
-					"PowerBattleSuit, Immune, calm, k"			.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerQuadDamage, Quad, calm, t"			.. "\n" ..
-					"PowerQ3Regeneration, Regen, calm, y"		.. "\n" ..
-					"PowerIronFeet, Suit, calm, d";
-			}
-
-			// Flakes Doom
-			else if (playerclass == "FKPlayer" && checkinventory("FirstTimeShotgunning"))
-			{
-				powerassignment =
-					"PowerHaste, Fast, calm, i"					.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerQuadDamage, Quad, calm, t"			.. "\n" ..
-					"PowerIronFeet, Suit, calm, d";
-			}
-
-			// NAKU-NARU 2
-			else if (playerclass == "NakuPlayer")
-			{
-				powerassignment =
-					"Damageupper, Damage, calm, t"				.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerIronFeet, Suit, calm, d";
-			}
-
-			// Project Brutality
-			else if (playerclass == "PB_PlayerPawn")
-			{
-				powerassignment =
-					"PowerStrength, Berserk, berserk, g"		.. "\n" ..
-					"PowerDoubleDamage, Damage, calm, t"		.. "\n" ..
-					"PowerSpeed, Fast, calm, i"					.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightAmp, Light, calm, f"				.. "\n" ..
-					"PowerIronfeet, Suit, calm, d"				.. "\n" ..
-					"PowerTimeFreezer, Time, calm, p";
-			}
-
-			// Supercharge
-			else if (playerclass == "TangoPlayer")
-			{
-				powerassignment =
-					"TangoPowerStrength, Berserk, berserk, g"	.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerIronFeet, Suit, calm, d";
-			}
-
-			// Doom, Heretic, Hexen, Strife
-			else
-			{
-				powerassignment =
-					"PowerStrength, Berserk, berserk, g"		.. "\n" ..
-					"PowerScanner, Detect, calm, w"				.. "\n" ..
-					"PowerSpeed, Fast, calm, i"					.. "\n" ..
-					"PowerFlight, Flight, calm, z"				.. "\n" ..
-					"PowerInvisibility, Hidden, calm, n"		.. "\n" ..
-					"PowerGhost, Hidden, calm, n"				.. "\n" ..
-					"PowerShadow, Hidden, calm, n"				.. "\n" ..
-					"PowerInvulnerable, Immune, calm, k"		.. "\n" ..
-					"PowerLightamp, Light, calm, f"				.. "\n" ..
-					"PowerTorch, Light, calm, f"				.. "\n" ..
-					"PowerWeaponlevel2, Power, calm, g"			.. "\n" ..
-					"PowerIronfeet, Suit, calm, d"				.. "\n" ..
-					"PowerMask, Suit, calm, d"					.. "\n" ..
-					"PowerTargeter, Target, calm, f";
-			}
+			case 1: // Top Left
+				alignx = false;
+				aligny = false;
+				xfraction = 0.0;
+				yfraction = 0.0;
+				marginx = double(cellwidth);
+				marginy = double(rowheight);
+				break;
+			case 2: // Center Left
+				alignx = false;
+				aligny = false;
+				xfraction = 0.0;
+				yfraction = 0.5;
+				marginx = double(cellwidth);
+				marginy = 0.0;
+				break;
+			case 3: // Bottom Left
+				alignx = false;
+				aligny = true;
+				xfraction = 0.0;
+				yfraction = 1.0;
+				marginx = double(cellwidth);
+				marginy = double(rowheight);
+				break;
+			case 5: // Center Right
+				alignx = true;
+				aligny = false;
+				xfraction = 1.0;
+				yfraction = 0.5;
+				marginx = 0.0;
+				marginy = 0.0;
+				break;
+			case 6: // Bottom Right
+				alignx = true;
+				aligny = true;
+				xfraction = 1.0;
+				yfraction = 1.0;
+				marginx = 0.0;
+				marginy = double(rowheight);
+				break;
+			default: // Top Right, also the fallback
+				alignx = true;
+				aligny = false;
+				xfraction = 1.0;
+				yfraction = 0.0;
+				marginx = 0.0;
+				marginy = double(rowheight);
+				break;
 		}
 
-		return powerassignment;
+		// measuring the block first keeps its outer edge pinned to the anchor,
+		// so a right-anchored block grows inward instead of past the margin
+		double blockx = (xfraction * (canvaswidth - blockwidth)) + (alignx ? -marginx : marginx);
+		double blocky = (yfraction * (canvasheight - blockheight)) + (aligny ? -marginy : marginy);
+		double numberx = blockx + double(labelwidth + columngap);
+		bool alignvalue = cvar.getcvar("li_alignvalue", player).getint();
+		int opacity = cvar.getcvar("li_opacity", player).getint();
+
+		if (opacity < 10)
+			opacity = 10;
+		else if (opacity > 100)
+			opacity = 100;
+
+		double alpha = double(opacity) / 100.0;
+
+		for (int i = 0; i < rowcount; i++)
+		{
+			double rowy = blocky + double(i * rowheight);
+
+			if (i < labelcount && labels[i].length() > 0)
+			{
+				screen.drawtext(renderfont, LI_BASECOLOR, blockx, rowy, labels[i], DTA_Alpha, alpha, DTA_KeepRatio, true, DTA_VirtualHeightF, canvasheight, DTA_VirtualWidthF, canvaswidth);
+			}
+
+			if (i < numbercount && numbers[i].length() > 0)
+			{
+				double rowx = numberx;
+
+				if (alignvalue)
+					rowx += double(numberwidth - renderfont.stringwidth(numbers[i]));
+
+				screen.drawtext(renderfont, LI_BASECOLOR, rowx, rowy, numbers[i], DTA_Alpha, alpha, DTA_KeepRatio, true, DTA_VirtualHeightF, canvasheight, DTA_VirtualWidthF, canvaswidth);
+			}
+		}
 	}
 }
